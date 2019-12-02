@@ -11,7 +11,7 @@ from utils import *
 from nltk.translate.bleu_score import corpus_bleu
 
 # Data parameters
-data_folder = '/datasets/home/50/650/agokhale/285project/a-PyTorch-Tutorial-to-Image-Captioning/data_generated'  # folder with data files saved by create_input_files.py
+data_folder = '/apoorva-volume/captioning/a-PyTorch-Tutorial-to-Image-Captioning/data_generated'  # folder with data files saved by create_input_files.py
 data_name = 'coco_5_cap_per_img_5_min_word_freq'  # base name shared by data files
 
 # Model parameters
@@ -35,7 +35,7 @@ alpha_c = 1.  # regularization parameter for 'doubly stochastic attention', as i
 best_bleu4 = 0.  # BLEU-4 score right now
 print_freq = 100  # print training/validation stats every __ batches
 fine_tune_encoder = False  # fine-tune encoder?
-checkpoint =  './checkpoint_coco_5_cap_per_img_5_min_word_freq.pth.tar' # path to checkpoint, None if none
+checkpoint =  None # path to checkpoint, None if none
 
 
 def main():

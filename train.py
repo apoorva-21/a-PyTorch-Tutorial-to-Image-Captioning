@@ -10,6 +10,9 @@ from datasets import *
 from utils import *
 from nltk.translate.bleu_score import corpus_bleu
 
+
+import csv
+
 # Data parameters
 data_folder = '/datasets/home/50/650/agokhale/285project/a-PyTorch-Tutorial-to-Image-Captioning/data_generated'  # folder with data files saved by create_input_files.py
 data_name = 'coco_5_cap_per_img_5_min_word_freq'  # base name shared by data files
@@ -35,9 +38,75 @@ alpha_c = 1.  # regularization parameter for 'doubly stochastic attention', as i
 best_bleu4 = 0.  # BLEU-4 score right now
 print_freq = 100  # print training/validation stats every __ batches
 fine_tune_encoder = False  # fine-tune encoder?
-checkpoint = None  # path to checkpoint, None if none
+checkpoint = None# './checkpoint_coco_5_cap_per_img_5_min_word_freq.pth.tar' # path to checkpoint, None if none
 
 
+#generate logs of loss with epoch, bleu score, top 5 accuracy
+#change backbone
+#change embed dim,hidden dim
+#change optimizer
+#change feature map
+#run each for 6 epochs
+
+net = 'resnet101'
+
+feature_dim = 14
+optim = 'adam'
+logs_path = '/datasets/home/50/650/agokhale/285project/sgr_logs'
+
+checkpoint_save_to = '/datasets/home/50/650/agokhale/285project/sgr_checkpoints/chk_{}_{}_{}_{}_{}.pth.tar'.format(net, str(emb_dim),str(decoder_dim),optim,str(feature_dim))
+
+
+log_file_name = 'logs_{}_{}_{}_{}_{}.csv'.format(net, str(emb_dim),str(decoder_dim),optim,str(feature_dim))
+
+val_log_file_name = 'val_' + log_file_name
+train_log_file_name = 'train_' + log_file_name
+val_log_full_path = os.path.join(logs_path,val_log_file_name)
+
+train_log_full_path = os.path.join(logs_path,train_log_file_name)
+
+val_logs = []
+train_logs = []
+
+csv_columns = ['epoch','losses','top5accs','bleu4']
+
+def get_dict(epoch, losses, top5accs, bleu4):
+    ret_dict = dict()
+    ret_dict['epoch'] = epoch
+    ret_dict['losses'] = losses
+    ret_dict['top5accs'] = top5accs
+    ret_dict['bleu4'] = bleu4
+    
+    return ret_dict
+
+
+def save_logs():
+    global train_logs, val_logs, csv_columns
+    
+    if not( os.path.exists(train_log_full_path)):
+        with open(train_log_full_path, 'w+') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=csv_columns)
+            writer.writeheader()
+            
+    if not(os.path.exists(val_log_full_path)):
+        with open(val_log_full_path, 'w+') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=csv_columns)
+            writer.writeheader()
+    
+    with open(train_log_full_path, 'a') as csvfile:
+        #write the train logs out
+        writer = csv.DictWriter(csvfile, fieldnames=csv_columns)
+        for data in train_logs:
+            writer.writerow(data)
+        
+    with open(val_log_full_path, 'a+') as csvfile:
+        #write the val logs out
+        writer = csv.DictWriter(csvfile, fieldnames=csv_columns)
+        for data in val_logs:
+            writer.writerow(data)
+
+    print('############## LOGS SAVED! ###############')
+    
 def main():
     """
     Training and validation.
@@ -59,7 +128,7 @@ def main():
                                        dropout=dropout)
         decoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, decoder.parameters()),
                                              lr=decoder_lr)
-        encoder = Encoder()
+        encoder = Encoder(encoded_image_size = feature_dim, model = net)
         encoder.fine_tune(fine_tune_encoder)
         encoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, encoder.parameters()),
                                              lr=encoder_lr) if fine_tune_encoder else None
@@ -119,7 +188,7 @@ def main():
         recent_bleu4 = validate(val_loader=val_loader,
                                 encoder=encoder,
                                 decoder=decoder,
-                                criterion=criterion)
+                                criterion=criterion, epoch = epoch)
 
         # Check if there was an improvement
         is_best = recent_bleu4 > best_bleu4
@@ -129,13 +198,17 @@ def main():
             print("\nEpochs since last improvement: %d\n" % (epochs_since_improvement,))
         else:
             epochs_since_improvement = 0
-
+        
+        
         # Save checkpoint
-        save_checkpoint(data_name, epoch, epochs_since_improvement, encoder, decoder, encoder_optimizer,
+        save_checkpoint(checkpoint_save_to, epoch, epochs_since_improvement, encoder, decoder, encoder_optimizer,
                         decoder_optimizer, recent_bleu4, is_best)
+        #Save logs:
+        save_logs()
 
 
 def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_optimizer, epoch):
+    global train_logs
     """
     Performs one epoch's training.
 
@@ -209,7 +282,8 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
         losses.update(loss.item(), sum(decode_lengths))
         top5accs.update(top5, sum(decode_lengths))
         batch_time.update(time.time() - start)
-
+        
+        
         start = time.time()
 
         # Print status
@@ -222,9 +296,15 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
                                                                           batch_time=batch_time,
                                                                           data_time=data_time, loss=losses,
                                                                           top5=top5accs))
+            
+    #after the train epoch, update logs
+    epoch_train_log = get_dict(epoch, losses, top5accs, bleu4)
+    train_logs.append(epoch_train_log)
 
 
-def validate(val_loader, encoder, decoder, criterion):
+
+def validate(val_loader, encoder, decoder, criterion, epoch):
+    global val_logs
     """
     Performs one epoch's validation.
 
@@ -321,14 +401,19 @@ def validate(val_loader, encoder, decoder, criterion):
         # Calculate BLEU-4 scores
         bleu4 = corpus_bleu(references, hypotheses)
 
-        print(
-            '\n * LOSS - {loss.avg:.3f}, TOP-5 ACCURACY - {top5.avg:.3f}, BLEU-4 - {bleu}\n'.format(
+        print('\n * LOSS - {loss.avg:.3f}, TOP-5 ACCURACY - {top5.avg:.3f}, BLEU-4 - {bleu}\n'.format(
                 loss=losses,
                 top5=top5accs,
                 bleu=bleu4))
-
+        
+        #after validation step, append to the epochwise logs
+        epoch_val_log = get_dict(epoch, losses, top5accs, bleu4)
+        val_log.append(epoch_val_log)
     return bleu4
 
 
 if __name__ == '__main__':
+    train_logs.append(get_dict(0,0,0,0))
+    val_logs.append(get_dict(0,0,0,0))           
+    save_logs()
     main()

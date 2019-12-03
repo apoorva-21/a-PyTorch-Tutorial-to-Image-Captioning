@@ -29,7 +29,7 @@ cudnn.benchmark = True  # set to true only if inputs to model are fixed size; ot
 start_epoch = 0
 epochs = 120  # number of epochs to train for (if early stopping is not triggered)
 epochs_since_improvement = 0  # keeps track of number of epochs since there's been an improvement in validation BLEU
-batch_size = 32
+batch_size = 128
 workers = 1  # for data-loading; right now, only 1 works with h5py
 encoder_lr = 1e-4  # learning rate for encoder if fine-tuning
 decoder_lr = 4e-4  # learning rate for decoder
@@ -48,13 +48,13 @@ checkpoint = None# './checkpoint_coco_5_cap_per_img_5_min_word_freq.pth.tar' # p
 #change feature map
 #run each for 6 epochs
 
-net = 'resnet101'
+net = 'resnet18'
 
 feature_dim = 14
 optim = 'adam'
 logs_path = '/datasets/home/50/650/agokhale/285project/sgr_logs'
 
-checkpoint_save_to = '/datasets/home/50/650/agokhale/285project/sgr_checkpoints/chk_{}_{}_{}_{}_{}.pth.tar'.format(net, str(emb_dim),str(decoder_dim),optim,str(feature_dim))
+checkpoint_save_to = '/datasets/home/50/650/agokhale/285project/sgr_checkpoints/chk_{}_{}_{}_{}_{}'.format(net, str(emb_dim),str(decoder_dim),optim,str(feature_dim))
 
 
 log_file_name = 'logs_{}_{}_{}_{}_{}.csv'.format(net, str(emb_dim),str(decoder_dim),optim,str(feature_dim))
@@ -68,9 +68,10 @@ train_log_full_path = os.path.join(logs_path,train_log_file_name)
 val_logs = []
 train_logs = []
 
-csv_columns = ['epoch','losses','top5accs','bleu4']
+train_csv_columns = ['epoch','losses','top5accs']
 
-def get_dict(epoch, losses, top5accs, bleu4):
+val_csv_columns = ['epoch','losses','top5accs','bleu4']
+def get_dict_val(epoch, losses, top5accs, bleu4):
     ret_dict = dict()
     ret_dict['epoch'] = epoch
     ret_dict['losses'] = losses
@@ -79,29 +80,38 @@ def get_dict(epoch, losses, top5accs, bleu4):
     
     return ret_dict
 
+def get_dict_train(epoch, losses, top5accs):
+    ret_dict = dict()
+    ret_dict['epoch'] = epoch
+    ret_dict['losses'] = losses
+    ret_dict['top5accs'] = top5accs
+#     ret_dict['bleu4'] = bleu4
+    
+    return ret_dict
+
 
 def save_logs():
-    global train_logs, val_logs, csv_columns
+    global train_logs, val_logs, train_csv_columns, val_csv_columns
     
     if not( os.path.exists(train_log_full_path)):
         with open(train_log_full_path, 'w+') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=csv_columns)
+            writer = csv.DictWriter(csvfile, fieldnames=train_csv_columns)
             writer.writeheader()
             
     if not(os.path.exists(val_log_full_path)):
         with open(val_log_full_path, 'w+') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=csv_columns)
+            writer = csv.DictWriter(csvfile, fieldnames=val_csv_columns)
             writer.writeheader()
     
     with open(train_log_full_path, 'a') as csvfile:
         #write the train logs out
-        writer = csv.DictWriter(csvfile, fieldnames=csv_columns)
+        writer = csv.DictWriter(csvfile, fieldnames=train_csv_columns)
         for data in train_logs:
             writer.writerow(data)
         
     with open(val_log_full_path, 'a+') as csvfile:
         #write the val logs out
-        writer = csv.DictWriter(csvfile, fieldnames=csv_columns)
+        writer = csv.DictWriter(csvfile, fieldnames=val_csv_columns)
         for data in val_logs:
             writer.writerow(data)
 
@@ -118,20 +128,24 @@ def main():
     word_map_file = os.path.join(data_folder, 'WORDMAP_' + data_name + '.json')
     with open(word_map_file, 'r') as j:
         word_map = json.load(j)
-
+        
     # Initialize / load checkpoint
     if checkpoint is None:
+        encoder = Encoder(encoded_image_size = feature_dim, model = net)
+        encoder.fine_tune(fine_tune_encoder)
+        encoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, encoder.parameters()),
+                                             lr=encoder_lr) if fine_tune_encoder else None
+        encoder_out_dim = encoder.get_out_dim()
+        
         decoder = DecoderWithAttention(attention_dim=attention_dim,
                                        embed_dim=emb_dim,
+                                       encoder_dim = encoder_out_dim,
                                        decoder_dim=decoder_dim,
                                        vocab_size=len(word_map),
                                        dropout=dropout)
         decoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, decoder.parameters()),
                                              lr=decoder_lr)
-        encoder = Encoder(encoded_image_size = feature_dim, model = net)
-        encoder.fine_tune(fine_tune_encoder)
-        encoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, encoder.parameters()),
-                                             lr=encoder_lr) if fine_tune_encoder else None
+        
 
     else:
         checkpoint = torch.load(checkpoint)
@@ -220,7 +234,8 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
     :param decoder_optimizer: optimizer to update decoder's weights
     :param epoch: epoch number
     """
-
+    loss = 0
+    top5 = 0
     decoder.train()  # train mode (dropout and batchnorm is used)
     encoder.train()
 
@@ -296,11 +311,10 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
                                                                           batch_time=batch_time,
                                                                           data_time=data_time, loss=losses,
                                                                           top5=top5accs))
-            
     #after the train epoch, update logs
-    epoch_train_log = get_dict(epoch, losses, top5accs, bleu4)
+    epoch_train_log = get_dict_train(epoch, loss, top5)
     train_logs.append(epoch_train_log)
-
+    
 
 
 def validate(val_loader, encoder, decoder, criterion, epoch):
@@ -321,7 +335,9 @@ def validate(val_loader, encoder, decoder, criterion, epoch):
     batch_time = AverageMeter()
     losses = AverageMeter()
     top5accs = AverageMeter()
-
+    loss = 0
+    top5 = 0
+    bleu = 0
     start = time.time()
 
     references = list()  # references (true captions) for calculating BLEU-4 score
@@ -397,7 +413,6 @@ def validate(val_loader, encoder, decoder, criterion, epoch):
             hypotheses.extend(preds)
 
             assert len(references) == len(hypotheses)
-
         # Calculate BLEU-4 scores
         bleu4 = corpus_bleu(references, hypotheses)
 
@@ -405,15 +420,11 @@ def validate(val_loader, encoder, decoder, criterion, epoch):
                 loss=losses,
                 top5=top5accs,
                 bleu=bleu4))
-        
         #after validation step, append to the epochwise logs
-        epoch_val_log = get_dict(epoch, losses, top5accs, bleu4)
-        val_log.append(epoch_val_log)
+        epoch_val_log = get_dict_val(epoch, loss, top5, bleu)
+        val_logs.append(epoch_val_log)
     return bleu4
 
 
-if __name__ == '__main__':
-    train_logs.append(get_dict(0,0,0,0))
-    val_logs.append(get_dict(0,0,0,0))           
-    save_logs()
+if __name__ == '__main__':          
     main()

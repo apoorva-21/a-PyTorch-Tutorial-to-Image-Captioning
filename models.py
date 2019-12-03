@@ -14,17 +14,31 @@ class Encoder(nn.Module):
         super(Encoder, self).__init__()
         self.enc_image_size = encoded_image_size
         net = []
+
         if model == 'resnet101':
             net = torchvision.models.resnet101(pretrained=True)  # pretrained ImageNet ResNet-101
-
+            self.out_dim = 2048
+        if model == 'resnet18':
+            net = torchvision.models.resnet18(pretrained=True)  # pretrained ImageNet ResNet-18
+            self.out_dim = 512
+        if model == 'resnet34':
+            net = torchvision.models.resnet34(pretrained=True)  # pretrained ImageNet ResNet-34
+            self.out_dim = 512
+        if model == 'resnet50':
+            net = torchvision.models.resnet50(pretrained=True)  # pretrained ImageNet ResNet-50
+            self.out_dim = 2048
         # Remove linear and pool layers (since we're not doing classification)
         modules = list(net.children())[:-2]
         self.net = nn.Sequential(*modules)
+        
         # Resize image to fixed size to allow input images of variable size
         self.adaptive_pool = nn.AdaptiveAvgPool2d((encoded_image_size, encoded_image_size))
 
         self.fine_tune()
 
+    def get_out_dim(self):
+        return self.out_dim
+    
     def forward(self, images):
         """
         Forward propagation.
